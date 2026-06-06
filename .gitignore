@@ -1,3 +1,4 @@
 .idea
+.env
 oci_a1_retry.log
 oci_a1_status.txt
