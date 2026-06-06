@@ -1,5 +1,5 @@
 #!/bin/bash
-set -euo pipefail
+set -uo pipefail
 
 # =============================================================================
 # Oracle Cloud A1 Instance War Script
@@ -95,7 +95,7 @@ check_connection() {
 create_instance() {
     local attempt=$1
     local max_label
-    if [[ "$MAX_RETRIES" -eq 0 ]]; then max_label="∞"; else max_label="$MAX_RETRIES"; fi
+    if [[ "$MAX_RETRIES" -eq 0 ]]; then max_label="INF"; else max_label="$MAX_RETRIES"; fi
     log "Attempt #${attempt}/${max_label} — ${OCPU} OCPU / ${MEMORY} GB / ${BOOT_VOLUME} GB disk"
     update_status "Attempt #${attempt}/${max_label} at $(date '+%Y-%m-%d %H:%M:%S')"
 
@@ -127,16 +127,18 @@ create_instance() {
         update_status "SUCCESS at $(date)"
 
         # Extract instance ID and fetch public IP
+        # Uses POSIX-compatible grep + sed (no -P flag required)
         local instance_id public_ip
-        instance_id=$(echo "$output" | grep -oP '"id":\s*"\K[^"]+' | head -1)
+        instance_id=$(echo "$output" | grep -o '"id": *"[^"]*"' | head -1 | sed 's/"id": *"//;s/"$//')
         if [[ -n "$instance_id" ]]; then
             log "Instance ID: $instance_id"
 
             sleep 10
-            public_ip=$(oci compute instance list-vnics \
+            local vnics_output
+            vnics_output=$(oci compute instance list-vnics \
                 --instance-id "$instance_id" \
-                --profile "$PROFILE" 2>&1 \
-                | grep -oP '"public-ip":\s*"\K[^"]+' | head -1)
+                --profile "$PROFILE" 2>&1) || true
+            public_ip=$(echo "$vnics_output" | grep -o '"public-ip": *"[^"]*"' | head -1 | sed 's/"public-ip": *"//;s/"$//')
 
             if [[ -n "$public_ip" ]]; then
                 log "Public IP: $public_ip"
