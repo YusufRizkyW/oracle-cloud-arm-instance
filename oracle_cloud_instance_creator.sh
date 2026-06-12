@@ -18,6 +18,10 @@ ENV_FILE="${SCRIPT_DIR}/.env"
 LOG_FILE="${SCRIPT_DIR}/oci_a1_retry.log"
 STATUS_FILE="${SCRIPT_DIR}/oci_a1_status.txt"
 
+# Load Telegram helper functions
+# shellcheck source=telegram.sh
+source "${SCRIPT_DIR}/telegram.sh"
+
 # Cooldown periods (seconds) — random range per error type
 CAPACITY_COOLDOWN_MIN=120     CAPACITY_COOLDOWN_MAX=300    # Out of host capacity → 2-5 min
 RATE_LIMIT_COOLDOWN_MIN=180  RATE_LIMIT_COOLDOWN_MAX=600  # 429 TooManyRequests  → 3-10 min
@@ -65,6 +69,11 @@ load_env() {
     BOOT_VOLUME="${BOOT_VOLUME:-100}"
     PROFILE="${PROFILE:-DEFAULT}"
     MAX_RETRIES="${MAX_RETRIES:-1000}"  # 0 = infinite
+
+    # Telegram optional variables with defaults
+    TELEGRAM_ENABLED="${TELEGRAM_ENABLED:-false}"
+    TELEGRAM_NOTIFY_INTERVAL="${TELEGRAM_NOTIFY_INTERVAL:-100}"
+    TELEGRAM_SEND_KEY="${TELEGRAM_SEND_KEY:-false}"
 
     log "Config loaded from $ENV_FILE"
     log "Target spec: ${OCPU} OCPU / ${MEMORY} GB RAM / ${BOOT_VOLUME} GB disk"
@@ -146,6 +155,7 @@ create_instance() {
             fi
         fi
 
+        telegram_notify_success "$attempt" "$instance_id" "$public_ip" "$PATH_TO_PUBLIC_SSH_KEY"
         return 0
     fi
 
@@ -166,6 +176,7 @@ create_instance() {
     elif echo "$output" | grep -qi "InvalidParameter\|LimitExceeded\|NotAuthorizedOrNotFound"; then
         log_error "Fatal error (won't auto-resolve): $output"
         update_status "FATAL ERROR at $(date)"
+        telegram_notify_fatal "$output"
         exit 1
     else
         cooldown=$(random_cooldown $GENERIC_COOLDOWN_MIN $GENERIC_COOLDOWN_MAX)
@@ -180,7 +191,7 @@ create_instance() {
 # ==================== MAIN ====================
 
 # Graceful shutdown handler
-trap 'log "Interrupted by signal"; update_status "Interrupted at $(date)"; exit 130' INT TERM
+trap 'log "Interrupted by signal"; update_status "Interrupted at $(date)"; telegram_notify_interrupted "$attempt"; exit 130' INT TERM
 
 log "=========================================="
 log "Oracle Cloud A1 War — Starting"
@@ -190,6 +201,19 @@ load_env
 check_ssh_key
 check_connection
 update_status "War started at $(date)"
+
+# ── Telegram: validate config, send start notification, backup SSH key ──
+telegram_validate
+
+if [[ "$MAX_RETRIES" -eq 0 ]]; then _max_label="INFINITE"; else _max_label="$MAX_RETRIES"; fi
+telegram_notify_start "$_max_label"
+
+if [[ "${TELEGRAM_SEND_KEY:-false}" == "true" ]]; then
+    priv_key="${PATH_TO_PUBLIC_SSH_KEY%.pub}"
+    log "Sending encrypted SSH key backup to Telegram..."
+    send_telegram_file "$priv_key" "🔐 Oracle ARM Private Key Backup — $(date '+%Y-%m-%d %H:%M:%S')"
+fi
+# ────────────────────────────────────────────────────────────────────────
 
 attempt=0
 while true; do
@@ -201,8 +225,11 @@ while true; do
         log_error "WAR LOST — $MAX_RETRIES attempts exhausted"
         log_error "=========================================="
         update_status "FAILED at $(date) after $MAX_RETRIES attempts"
+        telegram_notify_war_lost "$MAX_RETRIES"
         exit 1
     fi
+
+    telegram_notify_periodic "$attempt" "${_max_label:-INF}"
 
     if create_instance "$attempt"; then
         log "=========================================="
