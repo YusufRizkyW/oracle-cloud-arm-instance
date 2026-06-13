@@ -23,7 +23,7 @@ STATUS_FILE="${SCRIPT_DIR}/oci_a1_status.txt"
 source "${SCRIPT_DIR}/telegram.sh"
 
 # Cooldown periods (seconds) — random range per error type
-CAPACITY_COOLDOWN_MIN=120     CAPACITY_COOLDOWN_MAX=300    # Out of host capacity → 2-5 min
+CAPACITY_COOLDOWN_MIN=60     CAPACITY_COOLDOWN_MAX=240    # Out of host capacity → 1-4 min
 RATE_LIMIT_COOLDOWN_MIN=180  RATE_LIMIT_COOLDOWN_MAX=600  # 429 TooManyRequests  → 3-10 min
 NETWORK_COOLDOWN_MIN=120      NETWORK_COOLDOWN_MAX=240     # Network/timeout      → 2-4 min
 GENERIC_COOLDOWN_MIN=60      GENERIC_COOLDOWN_MAX=180     # Unknown errors       → 1-3 min
@@ -64,8 +64,8 @@ load_env() {
     fi
 
     # Optional variables with defaults
-    OCPU="${OCPU:-4}"
-    MEMORY="${MEMORY:-24}"
+    OCPU="${OCPU:-2}"
+    MEMORY="${MEMORY:-12}"
     BOOT_VOLUME="${BOOT_VOLUME:-100}"
     PROFILE="${PROFILE:-DEFAULT}"
     MAX_RETRIES="${MAX_RETRIES:-1000}"  # 0 = infinite
@@ -155,7 +155,7 @@ create_instance() {
             fi
         fi
 
-        telegram_notify_success "$attempt" "$instance_id" "$public_ip" "$PATH_TO_PUBLIC_SSH_KEY"
+        telegram_notify_success "$attempt" "${instance_id:-}" "${public_ip:-}" "$PATH_TO_PUBLIC_SSH_KEY"
         return 0
     fi
 
@@ -189,6 +189,9 @@ create_instance() {
 }
 
 # ==================== MAIN ====================
+
+# FIX: initialize attempt before trap so $attempt is never unbound under set -u
+attempt=0
 
 # Graceful shutdown handler
 trap 'log "Interrupted by signal"; update_status "Interrupted at $(date)"; telegram_notify_interrupted "$attempt"; exit 130' INT TERM
